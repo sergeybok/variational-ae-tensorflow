@@ -8,13 +8,13 @@ import gzip
 
 
 
-n_epochs = 300
+n_epochs = 50
 
-bsize = 100
+bsize = 200
 
 latent_dim = 2
 
-lr = 5e-7
+lr = 3e-4
 
 
 def get_mnist(filename='mnist.pkl.gz'):
@@ -88,7 +88,9 @@ z_random = tf.placeholder_with_default(tf.random_normal([1,latent_dim]),
 
 # build decoder
 
-decoder1_W = weight_variable(shape=[latent_dim,250])
+decoder0_W = weight_variable(shape=[latent_dim,30])
+decoder0_b = bias_variable(shape=[30])
+decoder1_W = weight_variable(shape=[30,250])
 decoder1_b = bias_variable(shape=[250,])
 decoder2_W = weight_variable(shape=[250,500])
 decoder2_b = bias_variable(shape=[500,])
@@ -97,32 +99,35 @@ decoder3_b = bias_variable(shape=[1000,])
 decoder4_W = weight_variable(shape=[1000,784])
 decoder4_b = bias_variable(shape=[784,])
 
-decoder1 = tf.nn.relu(tf.matmul(z_sample,decoder1_W) + decoder1_b)
+decoder0 = tf.nn.relu(tf.matmul(z_sample,decoder0_W) + decoder0_b)
+decoder1 = tf.nn.relu(tf.matmul(decoder0,decoder1_W) + decoder1_b)
 decoder2 = tf.nn.relu(tf.matmul(decoder1,decoder2_W) + decoder2_b)
 decoder3 = tf.nn.relu(tf.matmul(decoder2,decoder3_W) + decoder3_b)
 decoder4 = tf.matmul(decoder3,decoder4_W) + decoder4_b
 x_hat = tf.nn.sigmoid(decoder4)
 
-decoder1_ = tf.nn.relu(tf.matmul(z_random,decoder1_W) + decoder1_b)
+decoder0_ = tf.nn.relu(tf.matmul(z_random,decoder0_W) + decoder0_b)
+decoder1_ = tf.nn.relu(tf.matmul(decoder0_,decoder1_W) + decoder1_b)
 decoder2_ = tf.nn.relu(tf.matmul(decoder1_,decoder2_W) + decoder2_b)
 decoder3_ = tf.nn.relu(tf.matmul(decoder2_,decoder3_W) + decoder3_b)
 decoder4_ = tf.matmul(decoder3_,decoder4_W) + decoder4_b
 output = tf.nn.sigmoid(decoder4_)
 
 
-klloss = -(0.5)*tf.reduce_sum(1 + tf.log(z_sigma**2) - z_mu**2 - z_sigma**2,1)
+klloss = -(1)*tf.reduce_sum(1 + tf.log(z_sigma**2) - z_mu**2 - z_sigma**2,1)
 #kldiv = tf.reduce_sum(tf.contrib.distributions.kl(Qz, Pz), 1)
+sigmaloss = tf.reduce_sum((tf.ones_like(z_sigma)-z_sigma)**4 )
 
 offset = 1e-7
 obs = tf.clip_by_value(x_hat, offset, 1 - offset)
 logloss = -1*(tf.reduce_sum(Y*tf.log(obs) + (1-Y)*tf.log(1-obs)))
 #cross_entropy = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=Y,logits=decoder4))
-cost = tf.reduce_mean(logloss + klloss)
+cost = tf.reduce_mean(logloss + klloss + sigmaloss)
 
 
 global_step = tf.Variable(0,trainable=False)
 
-learning_rate = tf.train.exponential_decay(lr, global_step,10000,0.9,staircase=True)
+learning_rate = tf.train.exponential_decay(lr, global_step,1000,0.8,staircase=True)
 train_step = tf.train.AdamOptimizer(lr).minimize(cost, global_step=global_step)
 
 
@@ -141,11 +146,11 @@ n_batches = len(train_x) / bsize
 
 def save_img(name='vae_demo.png'):
 	from scipy.misc import imsave
-	nx = 26
-	ny = 26
+	nx = 30
+	ny = 30
 
-	xvals = np.linspace(-5,5,nx)
-	yvals = np.linspace(-5,5,ny)
+	xvals = np.linspace(-9,9,nx)
+	yvals = np.linspace(-9,9,ny)
 
 	img = np.empty((28*ny,28*nx))
 
@@ -169,12 +174,12 @@ for epoch in range(n_epochs):
 	kcost = klloss.eval(feed_dict={X:valid_x,Y:valid_x})
 	zmean = z_mu.eval(feed_dict={X:valid_x})
 	zsigm = z_sigma.eval(feed_dict={X:valid_x})
-	print('epoch %i || log cost = %f || kdiv cost = %f mu= %f sigma= %f' % (epoch+1, np.mean(logcost), np.mean(kcost),np.mean(zmean),np.mean(zsigm)))
+	print('epoch %i || log= %f | kdiv= %f mu= %f %f  sigma= %f %f' % (epoch+1, np.mean(logcost), np.mean(kcost),np.mean(zmean),np.std(zmean),np.mean(zsigm),np.std(zsigm)))
 	for batch in range(n_batches):
 		tx = train_x[batch*bsize:(batch+1)*bsize]
 		tx = (tx > 0.5).astype('float32')
 		train_step.run(feed_dict={X:tx,Y:tx})
-        if epoch % 10 == 0:
+        if epoch%5 == 0:
             save_img('pics/vae_%i.png'%(epoch))
 
 
