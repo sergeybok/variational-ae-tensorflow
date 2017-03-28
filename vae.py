@@ -1,17 +1,20 @@
-import tensorflow as tf 
-import numpy as np 
-import random 
+import tensorflow as tf
+import numpy as np
+
+
 import cPickle as pickle
 import gzip
 
 
 
 
-n_epochs = 10
+n_epochs = 300
 
 bsize = 100
 
+latent_dim = 2
 
+lr = 5e-7
 
 
 def get_mnist(filename='mnist.pkl.gz'):
@@ -21,23 +24,11 @@ def get_mnist(filename='mnist.pkl.gz'):
 	return train_set, valid_set, test_set
 
 def weight_variable(shape):
-	initial = tf.truncated_normal(shape, stddev=0.1)
+	initial = tf.truncated_normal(shape, stddev=0.01)
 	return tf.Variable(initial)
 
-def sparse_weight_variable(shape, sparse=15):
-	#initial = tf.truncated_normal(shape, stddev=0.1)
-	indices = []
-	values = []
-	for i in range(sparse):
-		indices.append([random.randint(0,shape[0]),random.randint(0,shape[1])])
-		values.append(random.gauss(0,0.1))
-	initial = tf.SparseTensor(indices=indices,values=values,dense_shape=shape)
-	dense = tf.sparse_tensor_to_dense(initial,validate_indices=False)
-	mask = tf.SparseTensor(indices=indices,values=[1]*sparse,dense_shape=shape)
-	return tf.Variable(dense), mask
-
-def bias_variable(shape):
-	initial = tf.constant(0.0, shape=shape)
+def bias_variable(shape,c=0.0):
+	initial = tf.constant(c, shape=shape)
 	return tf.Variable(initial)
 
 
@@ -53,74 +44,117 @@ Y = tf.placeholder(tf.float32, shape=[None,784])
 
 # Begin encoder
 
-encode1_W, encode1_mask = sparse_weight_variable(shape=[784,1000],sparse=15)
-encode1_b = bias_variable([1000])
-encode2_W, encode1_mask = sparse_weight_variable(shape=[1000,500],sparse=15)
-encode2_b = bias_variable([500])
-encode3_W, encode1_mask = sparse_weight_variable(shape=[500,250],sparse=15)
-encode3_b = bias_variable([250])
+encoder1_W = weight_variable(shape=[784,1000])
+encoder1_b = bias_variable(shape=[1000,])
+encoder2_W = weight_variable(shape=[1000,500])
+encoder2_b = bias_variable(shape=[500,])
+encoder3_W = weight_variable(shape=[500,250])
+encoder3_b = bias_variable(shape=[250,])
+encoder4_W = weight_variable(shape=[250,30])
+encoder4_b = bias_variable(shape=[30,])
 
 
-encode1 = tf.nn.relu(tf.matmul(X,encode1_W) + encode1_b)
-encode2 = tf.nn.relu(tf.matmul(encode1,encode2_W) + encode2_b)
-encode3 = tf.matmul(encode2,encode3_W) + encode3_b
-encode3neuron = tf.nn.relu(encode3)
-
-# Begin VAE z definition
-
-mu_W = weight_variable(shape=[250,30])
-mu_b = bias_variable([30])
-logsd_W = weight_variable(shape=[250,30])
-logsd_b = bias_variable([30])
-
-mu = tf.matmul(encode3neuron,mu_W) + mu_b
-logsd = tf.matmul(encode3,logsd_W) + logsd_b
-sd = tf.exp(logsd)
-
-var = tf.multiply(sd,sd)
-meansq = tf.multiply(mu,mu)
-
-kldiv = 0.5*meansq + 0.5*var - logsd - 0.5
-klloss = tf.reduce_mean(kldiv)
+encoder1 = tf.nn.relu(tf.matmul(X,encoder1_W) + encoder1_b)
+encoder2 = tf.nn.relu(tf.matmul(encoder1,encoder2_W) + encoder2_b)
+encoder3 = tf.nn.relu(tf.matmul(encoder2,encoder3_W) + encoder3_b)
+encoder4 = tf.nn.relu(tf.matmul(encoder3,encoder4_W) + encoder4_b)
 
 
-noise = tf.random_normal(shape=tf.shape(sd), mean=0.0, stddev=1, dtype=tf.float32)
-sdnoise = tf.multiply(sd, noise)
-
-sample = sdnoise + mu
 
 
-# Begin decoder 
+# vae latent z defn
 
-decode4_W, decode4_mask = sparse_weight_variable(shape=[30,250],sparse=15)
-decode4_b = bias_variable([250])
-decode3_W, decode3_mask = sparse_weight_variable(shape=[250,500],sparse=15)
-decode3_b = bias_variable([500])
-decode2_W, encode1_mask = sparse_weight_variable(shape=[500,1000],sparse=15)
-decode2_b = bias_variable([1000])
-decode1_W, encode1_mask = sparse_weight_variable(shape=[1000,784],sparse=15)
-decode1_b = bias_variable([784])
+mu_W = weight_variable(shape=[30,latent_dim])
+mu_b = bias_variable(shape=[latent_dim,])
+sigma_W = weight_variable(shape=[30,latent_dim])
+sigma_b = bias_variable(shape=[latent_dim,])
+
+z_mu = (tf.matmul(encoder4,mu_W) + mu_b)
+z_sigma = tf.nn.softplus(tf.matmul(encoder4,sigma_W) + sigma_b)
+
+#Qz = tf.contrib.bayesflow.stochastic_tensor.StochasticTensor(distributions.Normal(mu=z_mu, sigma=z_sigma))
+
+Qz = tf.contrib.distributions.Normal(mu=z_mu, sigma=z_sigma)
+Pz = tf.contrib.distributions.Normal(mu=np.zeros([latent_dim,],dtype='float32'),
+		sigma=np.ones([latent_dim,],dtype='float32'))
+
+z_sample = Qz.sample()
+
+z_random = tf.placeholder_with_default(tf.random_normal([1,latent_dim]),
+				shape=[None,latent_dim], name='default_latent_z')
 
 
-decode4 = tf.nn.relu(tf.matmul(sample,decode4_W) + decode4_b)
-decode3 = tf.nn.relu(tf.matmul(decode4,decode3_W) + decode3_b)
-decode2 = tf.nn.relu(tf.matmul(decode3,decode2_W) + decode2_b)
-output = tf.matmul(decode2,decode1_W) + decode1_b
 
-cost = tf.nn.sigmoid_cross_entropy_with_logits(labels=Y,logits=output)
-train_step = tf.train.AdamOptimizer(1e-4).minimize(cost)
+
+# build decoder
+
+decoder1_W = weight_variable(shape=[latent_dim,250])
+decoder1_b = bias_variable(shape=[250,])
+decoder2_W = weight_variable(shape=[250,500])
+decoder2_b = bias_variable(shape=[500,])
+decoder3_W = weight_variable(shape=[500,1000])
+decoder3_b = bias_variable(shape=[1000,])
+decoder4_W = weight_variable(shape=[1000,784])
+decoder4_b = bias_variable(shape=[784,])
+
+decoder1 = tf.nn.relu(tf.matmul(z_sample,decoder1_W) + decoder1_b)
+decoder2 = tf.nn.relu(tf.matmul(decoder1,decoder2_W) + decoder2_b)
+decoder3 = tf.nn.relu(tf.matmul(decoder2,decoder3_W) + decoder3_b)
+decoder4 = tf.matmul(decoder3,decoder4_W) + decoder4_b
+x_hat = tf.nn.sigmoid(decoder4)
+
+decoder1_ = tf.nn.relu(tf.matmul(z_random,decoder1_W) + decoder1_b)
+decoder2_ = tf.nn.relu(tf.matmul(decoder1_,decoder2_W) + decoder2_b)
+decoder3_ = tf.nn.relu(tf.matmul(decoder2_,decoder3_W) + decoder3_b)
+decoder4_ = tf.matmul(decoder3_,decoder4_W) + decoder4_b
+output = tf.nn.sigmoid(decoder4_)
+
+
+klloss = -(0.5)*tf.reduce_sum(1 + tf.log(z_sigma**2) - z_mu**2 - z_sigma**2,1)
+#kldiv = tf.reduce_sum(tf.contrib.distributions.kl(Qz, Pz), 1)
+
+offset = 1e-7
+obs = tf.clip_by_value(x_hat, offset, 1 - offset)
+logloss = -1*(tf.reduce_sum(Y*tf.log(obs) + (1-Y)*tf.log(1-obs)))
+#cross_entropy = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=Y,logits=decoder4))
+cost = tf.reduce_mean(logloss + klloss)
+
+
+global_step = tf.Variable(0,trainable=False)
+
+learning_rate = tf.train.exponential_decay(lr, global_step,10000,0.9,staircase=True)
+train_step = tf.train.AdamOptimizer(lr).minimize(cost, global_step=global_step)
 
 
 
 
 print('loading data')
 
-train_set, valid_set, test_set = get_mnist()
+train_set, valid_set, _ = get_mnist()
 train_x, _ = train_set
 valid_x, _ = valid_set
 valid_x = valid_x[0:100]
 
 n_batches = len(train_x) / bsize
+
+
+
+def save_img(name='vae_demo.png'):
+	from scipy.misc import imsave
+	nx = 26
+	ny = 26
+
+	xvals = np.linspace(-5,5,nx)
+	yvals = np.linspace(-5,5,ny)
+
+	img = np.empty((28*ny,28*nx))
+
+	for xi, xv in enumerate(xvals):
+		for yi, yv in enumerate(yvals):
+			z = np.array([[xv,yv]],dtype='float32')
+			x_giv_z = output.eval(feed_dict={z_random:z})
+			img[(nx-xi-1)*28:(nx-xi)*28,yi*28:(yi+1)*28] = x_giv_z[0].reshape(28,28)
+	imsave(name,img)
 
 
 
@@ -131,15 +165,26 @@ sess = tf.InteractiveSession()
 sess.run(init)
 
 for epoch in range(n_epochs):
-	c = cost.eval(feed_dict={X:valid_x,Y:valid_x})
-	print('epoch %i || valid cost = %f' % (epoch+1, np.mean(c)))
+	logcost = logloss.eval(feed_dict={X:valid_x,Y:valid_x})
+	kcost = klloss.eval(feed_dict={X:valid_x,Y:valid_x})
+	zmean = z_mu.eval(feed_dict={X:valid_x})
+	zsigm = z_sigma.eval(feed_dict={X:valid_x})
+	print('epoch %i || log cost = %f || kdiv cost = %f mu= %f sigma= %f' % (epoch+1, np.mean(logcost), np.mean(kcost),np.mean(zmean),np.mean(zsigm)))
 	for batch in range(n_batches):
 		tx = train_x[batch*bsize:(batch+1)*bsize]
+		tx = (tx > 0.5).astype('float32')
 		train_step.run(feed_dict={X:tx,Y:tx})
+        if epoch % 10 == 0:
+            save_img('pics/vae_%i.png'%(epoch))
 
 
 
 
+
+
+# make picture of generated images
+
+save_img('vae_demo.png')
 
 
 
