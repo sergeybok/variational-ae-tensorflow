@@ -39,12 +39,13 @@ def bias_variable(shape,c=0.0):
 
 print('building model')
 
-X = tf.placeholder(tf.float32, shape=[None,784])
+X = tf.placeholder(tf.float32, shape=[None,28])
 Y = tf.placeholder(tf.float32, shape=[None,784])
 
 # Begin encoder
 
-encoder1_W = weight_variable(shape=[784,1000])
+
+encoder1_W = weight_variable(shape=[28,1000])
 encoder1_b = bias_variable(shape=[1000,])
 encoder2_W = weight_variable(shape=[1000,500])
 encoder2_b = bias_variable(shape=[500,])
@@ -138,7 +139,9 @@ print('loading data')
 train_set, valid_set, _ = get_mnist()
 train_x, _ = train_set
 valid_x, _ = valid_set
-valid_x = valid_x[0:100]
+valid_y = valid_x[0:100]
+valid_x = valid_y.reshape(100,28,28)
+valid_x = valid_x[:,14,:]
 
 n_batches = len(train_x) / bsize
 
@@ -170,17 +173,20 @@ sess = tf.InteractiveSession()
 sess.run(init)
 
 for epoch in range(n_epochs):
-	logcost = logloss.eval(feed_dict={X:valid_x,Y:valid_x})
-	kcost = klloss.eval(feed_dict={X:valid_x,Y:valid_x})
+
+	logcost = logloss.eval(feed_dict={X:valid_x,Y:valid_y})
+	kcost = klloss.eval(feed_dict={X:valid_x,Y:valid_y})
 	zmean = z_mu.eval(feed_dict={X:valid_x})
 	zsigm = z_sigma.eval(feed_dict={X:valid_x})
 	print('epoch %i || log= %f | kdiv= %f mu= %f %f  sigma= %f %f' % (epoch+1, np.mean(logcost), np.mean(kcost),np.mean(zmean),np.std(zmean),np.mean(zsigm),np.std(zsigm)))
 	for batch in range(n_batches):
-		tx = train_x[batch*bsize:(batch+1)*bsize]
-		tx = (tx > 0.5).astype('float32')
-		train_step.run(feed_dict={X:tx,Y:tx})
-        if epoch%5 == 0:
-            save_img('pics/vae_%i.png'%(epoch))
+		ty = train_x[batch*bsize:(batch+1)*bsize]
+		ty = (ty > 0.5).astype('float32')
+		tx = ty.reshape(bsize,28,28)
+		tx = tx[:,14,:]
+		train_step.run(feed_dict={X:tx,Y:ty})
+        if epoch%5 == 4:
+            save_img('cvae_pics/vae_%i.png'%(epoch))
 
 
 
@@ -189,7 +195,7 @@ for epoch in range(n_epochs):
 
 # make picture of generated images
 
-save_img('vae_demo.png')
+#save_img('vae_demo.png')
 
 
 
